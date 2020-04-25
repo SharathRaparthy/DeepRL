@@ -259,3 +259,27 @@ class TD3Net(nn.Module, BaseNet):
         q_1 = self.fc_critic_1(self.critic_body_1(x))
         q_2 = self.fc_critic_2(self.critic_body_2(x))
         return q_1, q_2
+
+
+class RewardPredictor(nn.Module, BaseNet):
+    def __init__(self, num_inputs, action_dim, hidden_units):
+        super(RewardPredictor, self).__init__()
+        self.fc1 = nn.Linear(num_inputs, hidden_units)
+        self.fc2 = nn.Linear(hidden_units, hidden_units)
+        self.out = nn.Linear(hidden_units, action_dim)
+        self.to(Config.DEVICE)
+
+    def forward(self, x):
+        x = F.tanh(self.fc1(x))
+        x = F.tanh(self.fc2(x))
+        rew_pred = F.tanh(self.out(x))
+
+        return  rew_pred
+
+    def format_r_input(self, s, a, s_prime):
+        if self.use_s:
+            return s
+        elif self.use_s_a:
+            return torch.cat([s, a], dim=-1)
+        else:  # use s_a_s'
+            return torch.cat([s, a, s_prime], dim=-1)
