@@ -15,8 +15,10 @@ class PPOAgent(BaseAgent):
         self.config = config
         self.task = config.task_fn()
         self.network = config.network_fn()
+        self.rew_pred = config.reward_predictor()
         self.actor_opt = config.actor_opt_fn(self.network.actor_params)
         self.critic_opt = config.critic_opt_fn(self.network.critic_params)
+        self.rew_opt = config.reward_opt_fn(self.rew_pred.parameters())
         self.total_steps = 0
         self.states = self.task.reset()
         self.states = config.state_normalizer(self.states)
@@ -27,6 +29,7 @@ class PPOAgent(BaseAgent):
         states = self.states
         for _ in range(config.rollout_length):
             prediction = self.network(states)
+
             next_states, rewards, terminals, info = self.task.step(to_np(prediction['a']))
             self.record_online_return(info)
             rewards = config.reward_normalizer(rewards)
@@ -88,4 +91,30 @@ class PPOAgent(BaseAgent):
                 self.critic_opt.zero_grad()
                 value_loss.backward()
                 self.critic_opt.step()
+
+    def reward_step(self):
+        config = self.config
+        # Rolling out new trajectories for training reward function
+        storage = Storage(config.rollout_length)
+        states = self.states
+        self.network.eval()
+        for _ in range(config.rollout_length):
+            prediction = self.network(states)
+            next_states, rewards, terminals, info = self.task.step(to_np(prediction['a']))
+
+            rewards = config.reward_normalizer(rewards)
+            next_states = config.state_normalizer(next_states)
+            storage.add(prediction)
+            storage.add({'r': tensor(rewards).unsqueeze(-1),
+                         'm': tensor(1 - terminals).unsqueeze(-1),
+                         's': tensor(states)})
+            states = next_states
+            self.total_steps += config.num_workers
+
+        self.states = states
+        prediction = self.network(states)
+        storage.add(prediction)
+
+
+
 

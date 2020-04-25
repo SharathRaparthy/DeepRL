@@ -16,8 +16,10 @@ class TD3Agent(BaseAgent):
         self.config = config
         self.task = config.task_fn()
         self.network = config.network_fn()
+        self.rew_pred = config.reward_predictor()
         self.target_network = config.network_fn()
         self.target_network.load_state_dict(self.network.state_dict())
+        self.rew_opt = config.reward_opt_fn(self.rew_pred.parameters())
         self.replay = config.replay_fn()
         self.random_process = config.random_process_fn()
         self.total_steps = 0

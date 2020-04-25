@@ -355,6 +355,8 @@ def ppo_continuous(**kwargs):
         critic_body=FCBody(config.state_dim, gate=torch.tanh))
     config.actor_opt_fn = lambda params: torch.optim.Adam(params, 3e-4)
     config.critic_opt_fn = lambda params: torch.optim.Adam(params, 1e-3)
+    config.reward_opt_fn = lambda  params: torch.optim.Adam(params, 1e-3)
+    config.reward_predictor = lambda: RewardPredictor(config.state_dim, config.action_dim, hidden_units=512)
     config.discount = 0.99
     config.use_gae = True
     config.gae_tau = 0.95
