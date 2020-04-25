@@ -22,6 +22,7 @@ class PPOAgent(BaseAgent):
         self.total_steps = 0
         self.states = self.task.reset()
         self.states = config.state_normalizer(self.states)
+        self.rew_loss = nn.MSELoss()
 
     def step(self):
         config = self.config
@@ -31,11 +32,15 @@ class PPOAgent(BaseAgent):
             prediction = self.network(states)
 
             next_states, rewards, terminals, info = self.task.step(to_np(prediction['a']))
+            with torch.no_grad():
+                input_image = self.rew_pred.format_r_input(states, prediction['a'], next_states)
+                reward_hat = self.rew_pred(input_image)
             self.record_online_return(info)
             rewards = config.reward_normalizer(rewards)
             next_states = config.state_normalizer(next_states)
             storage.add(prediction)
             storage.add({'r': tensor(rewards).unsqueeze(-1),
+                         'r_hat': tensor(reward_hat).unsqueeze(-1),
                          'm': tensor(1 - terminals).unsqueeze(-1),
                          's': tensor(states)})
             states = next_states
@@ -97,23 +102,34 @@ class PPOAgent(BaseAgent):
         # Rolling out new trajectories for training reward function
         storage = Storage(config.rollout_length)
         states = self.states
-        self.network.eval()
-        for _ in range(config.rollout_length):
-            prediction = self.network(states)
-            next_states, rewards, terminals, info = self.task.step(to_np(prediction['a']))
 
+        for _ in range(config.rollout_length):
+            with torch.no_grad():
+                prediction = self.network(states)
+            next_states, rewards, terminals, info = self.task.step(to_np(prediction['a']))
+            input_image = self.rew_pred.format_r_input(states, prediction['a'], next_states)
+            reward_hat = self.rew_pred(input_image)
             rewards = config.reward_normalizer(rewards)
             next_states = config.state_normalizer(next_states)
             storage.add(prediction)
             storage.add({'r': tensor(rewards).unsqueeze(-1),
-                         'm': tensor(1 - terminals).unsqueeze(-1),
-                         's': tensor(states)})
+                         'r_hat': tensor(reward_hat).unsqueeze(-1)
+                         })
             states = next_states
-            self.total_steps += config.num_workers
 
-        self.states = states
-        prediction = self.network(states)
-        storage.add(prediction)
+        r_hat, r = storage.cat(['r_hat', 'r'])
+        for _ in range(config.optimization_epochs):
+            sampler = random_sample(np.arange(states.size(0)), config.mini_batch_size)
+            for batch_indices in sampler:
+                batch_indices = tensor(batch_indices).long()
+                sampled_r_hat = r_hat[batch_indices]
+                sampled_r = r[batch_indices]
+                reward_loss = self.rew_loss(sampled_r, sampled_r_hat)
+                self.rew_opt.zero_grad()
+                reward_loss.backward()
+                self.rew_opt.step()
+
+
 
 
 
