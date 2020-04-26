@@ -33,10 +33,12 @@ class PPOAgent(BaseAgent):
 
             next_states, rewards, terminals, info = self.task.step(to_np(prediction['a']))
             with torch.no_grad():
-                input_image = self.rew_pred.format_r_input(states, prediction['a'], next_states)
-                reward_hat = self.rew_pred(input_image)
+                input_state = self.rew_pred.format_r_input(states, prediction['a'], next_states)
+                reward_hat = self.rew_pred(input_state)
             self.record_online_return(info)
+            # TODO: Change online return with new predicted rewards
             rewards = config.reward_normalizer(rewards)
+            reward_hat = config.reward_normalizer(reward_hat)
             next_states = config.state_normalizer(next_states)
             storage.add(prediction)
             storage.add({'r': tensor(rewards).unsqueeze(-1),
@@ -54,11 +56,11 @@ class PPOAgent(BaseAgent):
         advantages = tensor(np.zeros((config.num_workers, 1)))
         returns = prediction['v'].detach()
         for i in reversed(range(config.rollout_length)):
-            returns = storage.r[i] + config.discount * storage.m[i] * returns
+            returns = storage.r_hat[i] + config.discount * storage.m[i] * returns
             if not config.use_gae:
                 advantages = returns - storage.v[i].detach()
             else:
-                td_error = storage.r[i] + config.discount * storage.m[i] * storage.v[i + 1] - storage.v[i]
+                td_error = storage.r_hat[i] + config.discount * storage.m[i] * storage.v[i + 1] - storage.v[i]
                 advantages = advantages * config.gae_tau * config.discount * storage.m[i] + td_error
             storage.adv[i] = advantages.detach()
             storage.ret[i] = returns.detach()
@@ -101,29 +103,35 @@ class PPOAgent(BaseAgent):
         config = self.config
         # Rolling out new trajectories for training reward function
         storage = Storage(config.rollout_length)
-        states = self.states
-
+        states = self.task.reset()
+        self.rew_pred.train()
         for _ in range(config.rollout_length):
             with torch.no_grad():
                 prediction = self.network(states)
             next_states, rewards, terminals, info = self.task.step(to_np(prediction['a']))
-            input_image = self.rew_pred.format_r_input(states, prediction['a'], next_states)
-            reward_hat = self.rew_pred(input_image)
             rewards = config.reward_normalizer(rewards)
             next_states = config.state_normalizer(next_states)
             storage.add(prediction)
             storage.add({'r': tensor(rewards).unsqueeze(-1),
-                         'r_hat': tensor(reward_hat).unsqueeze(-1)
-                         })
+                         's': tensor(states),
+                         'n_s': tensor(next_states),
+                         'a': tensor(prediction['a'])})
             states = next_states
 
-        r_hat, r = storage.cat(['r_hat', 'r'])
+        states, rewards, next_states, actions = storage.cat(['s', 'r', 'n_s', 'a'])
+
         for _ in range(config.optimization_epochs):
             sampler = random_sample(np.arange(states.size(0)), config.mini_batch_size)
             for batch_indices in sampler:
                 batch_indices = tensor(batch_indices).long()
-                sampled_r_hat = r_hat[batch_indices]
-                sampled_r = r[batch_indices]
+                sampled_states = states[batch_indices]
+                sampled_next_states = next_states[batch_indices]
+                sampled_r = rewards[batch_indices]
+                sampled_actions = actions[batch_indices]
+                input_state = self.rew_pred.format_r_input(sampled_states,
+                                                           sampled_actions,
+                                                           sampled_next_states)
+                sampled_r_hat = self.rew_pred(input_state)
                 reward_loss = self.rew_loss(sampled_r, sampled_r_hat)
                 self.rew_opt.zero_grad()
                 reward_loss.backward()

@@ -174,7 +174,7 @@ class Storage:
     def __init__(self, size, keys=None):
         if keys is None:
             keys = []
-        keys = keys + ['s', 'a', 'r', 'r_hat', 'm',
+        keys = keys + ['s', 'a', 'r', 'r_hat', 'm', 'n_s',
                        'v', 'q', 'pi', 'log_pi', 'ent',
                        'adv', 'ret', 'q_a', 'log_pi_a',
                        'mean']

@@ -264,10 +264,18 @@ class TD3Net(nn.Module, BaseNet):
 class RewardPredictor(nn.Module, BaseNet):
     def __init__(self, num_inputs, action_dim, hidden_units):
         super(RewardPredictor, self).__init__()
-        self.fc1 = nn.Linear(num_inputs, hidden_units)
-        self.fc2 = nn.Linear(hidden_units, hidden_units)
-        self.out = nn.Linear(hidden_units, action_dim)
         self.to(Config.DEVICE)
+        self.use_s_a = False
+        self.use_s = False
+        if self.use_s:
+            inputs = num_inputs
+        elif self.use_s_a:
+            inputs = num_inputs + action_dim
+        else:
+            inputs = num_inputs * 2 + action_dim
+        self.fc1 = nn.Linear(inputs, hidden_units)
+        self.fc2 = nn.Linear(hidden_units, hidden_units)
+        self.out = nn.Linear(hidden_units, 1)
 
     def forward(self, x):
         x = F.tanh(self.fc1(x))
@@ -277,6 +285,7 @@ class RewardPredictor(nn.Module, BaseNet):
         return  rew_pred
 
     def format_r_input(self, s, a, s_prime):
+        s, a, s_prime = tensor(s), tensor(a), tensor(s_prime)
         if self.use_s:
             return s
         elif self.use_s_a:

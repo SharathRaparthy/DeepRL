@@ -454,7 +454,7 @@ if __name__ == '__main__':
     game = 'HalfCheetah-v2'
     # game = 'Hopper-v2'
     # a2c_continuous(game=game)
-    # ppo_continuous(game=game)
+    ppo_continuous(game=game)
     # ddpg_continuous(game=game)
     # td3_continuous(game=game)
 

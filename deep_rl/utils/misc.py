@@ -30,6 +30,7 @@ def run_steps(agent):
             agent.close()
             break
         agent.step()
+        agent.reward_step()
         agent.switch_task()
 
 
