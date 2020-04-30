@@ -7,7 +7,9 @@
 from ..network import *
 from ..component import *
 from .BaseAgent import *
+import wandb
 
+# wandb.init(project="opt-cumulant-design")
 
 class PPOAgent(BaseAgent):
     def __init__(self, config):
@@ -23,6 +25,9 @@ class PPOAgent(BaseAgent):
         self.states = self.task.reset()
         self.states = config.state_normalizer(self.states)
         self.rew_loss = nn.MSELoss()
+        self.return_hat = 0
+        self.returns_all = deque(maxlen=3000)
+        self.loss = []
 
     def step(self):
         config = self.config
@@ -35,7 +40,13 @@ class PPOAgent(BaseAgent):
             with torch.no_grad():
                 input_state = self.rew_pred.format_r_input(states, prediction['a'], next_states)
                 reward_hat = self.rew_pred(input_state)
+                self.return_hat += reward_hat.item()
             self.record_online_return(info)
+            if terminals[0]:
+                # wandb.log({"Returns Hat": self.return_hat})
+                self.returns_all.append(self.return_hat)
+                np.save('returns_hat_ppo.npy', np.asarray(self.returns_all))
+                self.return_hat = 0
             # TODO: Change online return with new predicted rewards
             rewards = config.reward_normalizer(rewards)
             reward_hat = config.reward_normalizer(reward_hat)
@@ -118,6 +129,7 @@ class PPOAgent(BaseAgent):
                          'a': tensor(prediction['a'])})
             states = next_states
 
+        storage.placeholder()
         states, rewards, next_states, actions = storage.cat(['s', 'r', 'n_s', 'a'])
 
         for _ in range(config.optimization_epochs):
@@ -133,9 +145,12 @@ class PPOAgent(BaseAgent):
                                                            sampled_next_states)
                 sampled_r_hat = self.rew_pred(input_state)
                 reward_loss = self.rew_loss(sampled_r, sampled_r_hat)
+                self.loss.append(reward_loss)
+                # wandb.log({"Reward Loss": reward_loss})
                 self.rew_opt.zero_grad()
                 reward_loss.backward()
                 self.rew_opt.step()
+        np.save('reward_loss.npy', np.asarray(self.loss))
 
 
 

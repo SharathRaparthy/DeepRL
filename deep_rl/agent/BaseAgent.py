@@ -17,8 +17,10 @@ class BaseAgent:
         self.config = config
         self.logger = get_logger(tag=config.tag, log_level=config.log_level)
         self.task_ind = 0
+        self.returns_all = deque(maxlen=3000)
 
     def close(self):
+        np.save('ppo_learned_rewards.npy', np.asarray(self.returns_all))
         close_obj(self.task)
 
     def save(self, filename):
