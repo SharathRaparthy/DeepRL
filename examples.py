@@ -368,6 +368,8 @@ def ppo_continuous(**kwargs):
     config.log_interval = 2048
     config.max_steps = 3e6
     config.target_kl = 0.01
+    config.game_type = "aggressive_reward"
+    config.conservative_improvement_step = 5
     config.state_normalizer = MeanStdNormalizer()
     run_steps(PPOAgent(config))
 

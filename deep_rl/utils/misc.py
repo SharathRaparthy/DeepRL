@@ -29,8 +29,18 @@ def run_steps(agent):
         if config.max_steps and agent.total_steps >= config.max_steps:
             agent.close()
             break
-        agent.step()
-        agent.reward_step()
+        if config.game_type == "aggressive_reward":
+            print('-----------Aggressive Reward Step --------------')
+            agent.reward_step()
+            if agent.reward_step_count % config.conservative_improvement_step == 0:
+                print('-----------Conservative Policy Step --------------')
+                agent.step()
+        if config.game_type == "aggressive_policy":
+            print('-----------Aggressive Policy Step --------------')
+            agent.step()
+            if agent.policy_step_count % config.conservative_improvement_step == 0:
+                print('-----------Conservative Reward Step --------------')
+                agent.reward_step()
         agent.switch_task()
 
 

@@ -28,11 +28,14 @@ class PPOAgent(BaseAgent):
         self.return_hat = 0
         self.returns_all = deque(maxlen=3000)
         self.loss = []
+        self.policy_step_count = 0
+        self.reward_step_count = 0
 
     def step(self):
         config = self.config
         storage = Storage(config.rollout_length)
         states = self.states
+        self.policy_step_count += 1
         for _ in range(config.rollout_length):
             prediction = self.network(states)
 
@@ -112,6 +115,7 @@ class PPOAgent(BaseAgent):
 
     def reward_step(self):
         config = self.config
+        self.reward_step_count += 1
         # Rolling out new trajectories for training reward function
         storage = Storage(config.rollout_length)
         states = self.task.reset()
