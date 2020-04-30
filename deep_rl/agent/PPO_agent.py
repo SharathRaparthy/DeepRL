@@ -47,7 +47,7 @@ class PPOAgent(BaseAgent):
                 self.returns_all.append(self.return_hat)
                 np.save('returns_hat_ppo.npy', np.asarray(self.returns_all))
                 self.return_hat = 0
-            # TODO: Change online return with new predicted rewards
+
             rewards = config.reward_normalizer(rewards)
             reward_hat = config.reward_normalizer(reward_hat)
             next_states = config.state_normalizer(next_states)
@@ -99,7 +99,7 @@ class PPOAgent(BaseAgent):
                 policy_loss = -torch.min(obj, obj_clipped).mean() - config.entropy_weight * prediction['ent'].mean()
 
                 value_loss = 0.5 * (sampled_returns - prediction['v']).pow(2).mean()
-
+                # There are two losses here. Which loss should I use for
                 approx_kl = (sampled_log_probs_old - prediction['log_pi_a']).mean()
                 if approx_kl <= 1.5 * config.target_kl:
                     self.actor_opt.zero_grad()
