@@ -87,7 +87,8 @@ ENV/
 
 # Rope project settings
 .ropeproject
-
+*.npy
+*.png
 .idea
 data
 dataset
