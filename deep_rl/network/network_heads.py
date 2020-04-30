@@ -280,9 +280,9 @@ class RewardPredictor(nn.Module, BaseNet):
     def forward(self, x):
         x = F.tanh(self.fc1(x))
         x = F.tanh(self.fc2(x))
-        rew_pred = F.tanh(self.out(x))
+        rew_pred = self.out(x)
 
-        return  rew_pred
+        return rew_pred
 
     def format_r_input(self, s, a, s_prime):
         s, a, s_prime = tensor(s), tensor(a), tensor(s_prime)
