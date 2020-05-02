@@ -15,6 +15,7 @@ class PPOAgent(BaseAgent):
     def __init__(self, config):
         BaseAgent.__init__(self, config)
         self.config = config
+        self.logger = get_logger(tag=config.tag, log_level=config.log_level)
         self.task = config.task_fn()
         self.network = config.network_fn()
         self.rew_pred = config.reward_predictor()
@@ -32,8 +33,9 @@ class PPOAgent(BaseAgent):
         self.reward_step_count = 0
 
     def step(self):
+
         config = self.config
-        storage = Storage(config.rollout_length)
+        self.storage = Storage(config.rollout_length)
         states = self.states
         self.policy_step_count += 1
         for _ in range(config.rollout_length):
@@ -44,42 +46,45 @@ class PPOAgent(BaseAgent):
                 input_state = self.rew_pred.format_r_input(states, prediction['a'], next_states)
                 reward_hat = self.rew_pred(input_state)
                 self.return_hat += reward_hat.item()
-            self.record_online_return(info)
+            # self.record_online_return(info)
             if terminals[0]:
                 # wandb.log({"Returns Hat": self.return_hat})
                 self.returns_all.append(self.return_hat)
-                np.save('returns_hat_ppo.npy', np.asarray(self.returns_all))
+                self.logger.info('steps %d, episodic_return_hat_train %s' % (self.total_steps, self.return_hat))
+                np.save('{}_returns_hat_ppo_reuse_exp.npy'.format(config.game_type), np.asarray(self.returns_all))
                 self.return_hat = 0
 
             rewards = config.reward_normalizer(rewards)
             reward_hat = config.reward_normalizer(reward_hat)
             next_states = config.state_normalizer(next_states)
-            storage.add(prediction)
-            storage.add({'r': tensor(rewards).unsqueeze(-1),
-                         'r_hat': tensor(reward_hat).unsqueeze(-1),
-                         'm': tensor(1 - terminals).unsqueeze(-1),
-                         's': tensor(states)})
+            self.storage.add(prediction)
+            self.storage.add({'r': tensor(rewards).unsqueeze(-1),
+                              'r_hat': tensor(reward_hat).unsqueeze(-1),
+                              'm': tensor(1 - terminals).unsqueeze(-1),
+                              's': tensor(states),
+                              'n_s': tensor(next_states),
+                              'a': tensor(prediction['a'])})
             states = next_states
             self.total_steps += config.num_workers
 
         self.states = states
         prediction = self.network(states)
-        storage.add(prediction)
-        storage.placeholder()
+        self.storage.add(prediction)
+        self.storage.placeholder()
 
         advantages = tensor(np.zeros((config.num_workers, 1)))
         returns = prediction['v'].detach()
         for i in reversed(range(config.rollout_length)):
-            returns = storage.r_hat[i] + config.discount * storage.m[i] * returns
+            returns = self.storage.r_hat[i] + config.discount * self.storage.m[i] * returns
             if not config.use_gae:
-                advantages = returns - storage.v[i].detach()
+                advantages = returns - self.storage.v[i].detach()
             else:
-                td_error = storage.r_hat[i] + config.discount * storage.m[i] * storage.v[i + 1] - storage.v[i]
-                advantages = advantages * config.gae_tau * config.discount * storage.m[i] + td_error
-            storage.adv[i] = advantages.detach()
-            storage.ret[i] = returns.detach()
+                td_error = self.storage.r_hat[i] + config.discount * self.storage.m[i] * self.storage.v[i + 1] - self.storage.v[i]
+                advantages = advantages * config.gae_tau * config.discount * self.storage.m[i] + td_error
+            self.storage.adv[i] = advantages.detach()
+            self.storage.ret[i] = returns.detach()
 
-        states, actions, log_probs_old, returns, advantages = storage.cat(['s', 'a', 'log_pi_a', 'ret', 'adv'])
+        states, actions, log_probs_old, returns, advantages = self.storage.cat(['s', 'a', 'log_pi_a', 'ret', 'adv'])
         actions = actions.detach()
         log_probs_old = log_probs_old.detach()
         advantages = (advantages - advantages.mean()) / advantages.std()
@@ -116,25 +121,29 @@ class PPOAgent(BaseAgent):
     def reward_step(self):
         config = self.config
         self.reward_step_count += 1
-        # Rolling out new trajectories for training reward function
-        storage = Storage(config.rollout_length)
-        states = self.task.reset()
-        self.rew_pred.train()
-        for _ in range(config.rollout_length):
-            with torch.no_grad():
-                prediction = self.network(states)
-            next_states, rewards, terminals, info = self.task.step(to_np(prediction['a']))
-            rewards = config.reward_normalizer(rewards)
-            next_states = config.state_normalizer(next_states)
-            storage.add(prediction)
-            storage.add({'r': tensor(rewards).unsqueeze(-1),
-                         's': tensor(states),
-                         'n_s': tensor(next_states),
-                         'a': tensor(prediction['a'])})
-            states = next_states
+        if config.resuse_exp:
+            # Rolling out new trajectories for training reward function
+            storage = Storage(config.rollout_length)
+            states = self.task.reset()
+            self.rew_pred.train()
+            for _ in range(config.rollout_length):
+                with torch.no_grad():
+                    prediction = self.network(states)
+                next_states, rewards, terminals, info = self.task.step(to_np(prediction['a']))
+                rewards = config.reward_normalizer(rewards)
+                next_states = config.state_normalizer(next_states)
+                storage.add(prediction)
+                storage.add({'r': tensor(rewards).unsqueeze(-1),
+                             's': tensor(states),
+                             'n_s': tensor(next_states),
+                             'a': tensor(prediction['a'])})
+                states = next_states
 
-        storage.placeholder()
-        states, rewards, next_states, actions = storage.cat(['s', 'r', 'n_s', 'a'])
+            storage.placeholder()
+            states, rewards, next_states, actions = storage.cat(['s', 'r', 'n_s', 'a'])
+        else:
+            self.storage.placeholder()
+            states, rewards, next_states, actions = self.storage.cat(['s', 'r', 'n_s', 'a'])
 
         for _ in range(config.optimization_epochs):
             sampler = random_sample(np.arange(states.size(0)), config.mini_batch_size)
@@ -154,7 +163,7 @@ class PPOAgent(BaseAgent):
                 self.rew_opt.zero_grad()
                 reward_loss.backward()
                 self.rew_opt.step()
-        np.save('reward_loss.npy', np.asarray(self.loss))
+        np.save('{}_reward_loss_reuse_exp.npy'.format(config.game_type), np.asarray(self.loss))
 
 
 

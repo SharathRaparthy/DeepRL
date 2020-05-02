@@ -369,6 +369,7 @@ def ppo_continuous(**kwargs):
     config.max_steps = 3e6
     config.target_kl = 0.01
     config.game_type = "aggressive_reward"
+    config.reuse_exp = False
     config.conservative_improvement_step = 5
     config.state_normalizer = MeanStdNormalizer()
     run_steps(PPOAgent(config))
