@@ -5,7 +5,7 @@
 #SBATCH --mem=32G                        # Ask for 32 GB of RAM
 #SBATCH --time=08:00:00                   # The job will run for 48 hours
 #SBATCH --mail-user=sharathraparthy@gmail.com
-# SBATCH --array=1-6
+#SBATCH --array=1-5
 #SBATCH --mail-type=ALL
 #SBATCH --mail-type=BEGIN
 #SBATCH --mail-type=END
