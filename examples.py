@@ -370,6 +370,7 @@ def ppo_continuous(**kwargs):
     config.target_kl = 0.01
     config.game_type = "aggressive_policy"
     jobid = os.environ["SLURM_ARRAY_TASK_ID"]
+    # jobid = 1
     improvement = [2, 3, 4, 5, 6]
     config.conservative_improvement_step = improvement[int(jobid) - 1]
     config.state_normalizer = MeanStdNormalizer()

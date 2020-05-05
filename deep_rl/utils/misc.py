@@ -19,27 +19,27 @@ def run_steps(agent):
     agent_name = agent.__class__.__name__
     t0 = time.time()
     while True:
-        if config.save_interval and not agent.total_steps % config.save_interval:
+        if config.save_interval and not agent.policy_step % config.save_interval:
             agent.save('data/%s-%s-%d' % (agent_name, config.tag, agent.total_steps))
-        if config.log_interval and not agent.total_steps % config.log_interval:
+        if config.log_interval and not agent.policy_step % config.log_interval:
             agent.logger.info('steps %d, %.2f steps/s' % (agent.total_steps, config.log_interval / (time.time() - t0)))
             t0 = time.time()
-        if config.eval_interval and not agent.total_steps % config.eval_interval:
+        if config.eval_interval and not agent.policy_step % config.eval_interval:
             agent.eval_episodes()
-        if config.max_steps and agent.total_steps >= config.max_steps:
+        if config.max_steps and agent.policy_step >= config.max_steps:
             agent.close()
             break
         if config.game_type == "aggressive_reward":
-            print('-----------Aggressive Reward Step --------------')
+            agent.logger.info('-----------Aggressive Reward Step --------------')
             agent.reward_step()
             if agent.reward_step_count % config.conservative_improvement_step == 0:
-                print('-----------Conservative Policy Step --------------')
+                agent.logger.info('-----------Conservative Policy Step --------------')
                 agent.step()
         if config.game_type == "aggressive_policy":
-            print('-----------Aggressive Policy Step --------------')
+            agent.logger.info('-----------Aggressive Policy Step --------------')
             agent.step()
             if agent.policy_step_count % config.conservative_improvement_step == 0:
-                print('-----------Conservative Reward Step --------------')
+                agent.logger.info('-----------Conservative Reward Step --------------')
                 agent.reward_step()
         agent.switch_task()
 
