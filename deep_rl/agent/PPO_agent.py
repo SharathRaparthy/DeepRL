@@ -30,17 +30,17 @@ class PPOAgent(BaseAgent):
         self.returns_all = deque(maxlen=3000)
         self.loss = []
         self.policy_step_count = 0
+        self.policy_step = 0
         self.reward_step_count = 0
 
     def step(self):
 
         config = self.config
-
-        states = self.states
         self.policy_step_count += 1
+        states = self.states
 
         self.states = states
-        storage = self.rollout()
+        storage = self.rollout(update_type='policy')
 
         prediction = self.network(states)
         storage.add(prediction)
@@ -95,7 +95,7 @@ class PPOAgent(BaseAgent):
     def reward_step(self):
         config = self.config
         self.reward_step_count += 1
-        storage = self.rollout()
+        storage = self.rollout(update_type='reward')
 
         storage.placeholder()
         states, rewards, next_states, actions = storage.cat(['s', 'r', 'n_s', 'a'])
@@ -117,39 +117,50 @@ class PPOAgent(BaseAgent):
                 self.rew_opt.zero_grad()
                 reward_loss.backward()
                 self.rew_opt.step()
-        np.save('{}_reward_loss_reuse_exp.npy'.format(config.game_type), np.asarray(self.loss))
+        np.save('{}_reward_loss.npy'.format(config.game_type), np.asarray(self.loss))
 
-    def rollout(self):
+    def rollout(self, update_type):
         config = self.config
         states = self.states
         storage = Storage(config.rollout_length)
         for _ in range(config.rollout_length):
-            prediction = self.network(states)
-
+            if update_type == 'policy':
+                prediction = self.network(states)
+                self.policy_step += config.num_workers
+            else:
+                with torch.no_grad():
+                    prediction = self.network(states)
             next_states, rewards, terminals, info = self.task.step(to_np(prediction['a']))
-            with torch.no_grad():
+
+            if update_type == 'reward':
                 input_state = self.rew_pred.format_r_input(states, prediction['a'], next_states)
                 reward_hat = self.rew_pred(input_state)
-                self.return_hat += reward_hat.item()
+            else:
+                with torch.no_grad():
+                    input_state = self.rew_pred.format_r_input(states, prediction['a'], next_states)
+                    reward_hat = self.rew_pred(input_state)
+            self.return_hat += reward_hat.item()
             # self.record_online_return(info)
-            if terminals[0]:
-                self.returns_all.append(self.return_hat)
-                self.logger.info('steps %d, episodic_return_hat_train %s' % (self.total_steps, self.return_hat))
-                np.save('{}_returns_hat_ppo_reuse_exp_{}.npy'.format(config.game_type,
-                                                                     config.conservative_improvement_step),
-                        np.asarray(self.returns_all))
-                self.return_hat = 0
+            if update_type == 'policy':
+                if terminals[0]:
+                    self.returns_all.append(self.return_hat)
+                    self.logger.info('steps %d, episodic_return_hat_train %s' % (self.policy_step, self.return_hat))
+                    np.save('{}_returns_hat_ppo_{}.npy'.format(config.game_type,
+                                                                         config.conservative_improvement_step,
+                                                                         config.conservative_improvement_step),
+                            np.asarray(self.returns_all))
+                    self.return_hat = 0
 
             rewards = config.reward_normalizer(rewards)
             reward_hat = config.reward_normalizer(reward_hat)
             next_states = config.state_normalizer(next_states)
             storage.add(prediction)
             storage.add({'r': tensor(rewards).unsqueeze(-1),
-                              'r_hat': tensor(reward_hat).unsqueeze(-1),
-                              'm': tensor(1 - terminals).unsqueeze(-1),
-                              's': tensor(states),
-                              'n_s': tensor(next_states),
-                              'a': tensor(prediction['a'])})
+                         'r_hat': tensor(reward_hat).unsqueeze(-1),
+                         'm': tensor(1 - terminals).unsqueeze(-1),
+                         's': tensor(states),
+                         'n_s': tensor(next_states),
+                         'a': tensor(prediction['a'])})
             states = next_states
             self.total_steps += config.num_workers
         return storage
