@@ -182,6 +182,32 @@ class GaussianActorCriticNet(nn.Module, BaseNet):
                 'v': v}
 
 
+class RewardPredictor(nn.Module, BaseNet):
+    def __init__(self,
+                 state_dim,
+                 action_dim,
+                 phi_body=None,
+                 reward_body=None): # No need of critic body
+        super(RewardPredictor, self).__init__()
+        if phi_body is None: phi_body = DummyBody(state_dim)
+        if reward_body is None: actor_body = DummyBody(phi_body.feature_dim)
+        self.phi_body = phi_body
+        self.reward_body = reward_body
+        self.fc_reward = layer_init(nn.Linear(reward_body.feature_dim, action_dim), 1e-3)
+
+        self.phi_params = list(self.phi_body.parameters())
+
+        self.reward_params = list(self.reward_body.parameters()) + list(self.fc_reward.parameters()) + self.phi_params
+        self.to(Config.DEVICE)
+
+    def forward(self, obs, action=None):
+        obs = tensor(obs)
+        phi = self.phi_body(obs)
+        phi_a = self.reward_body(phi)
+        reward = self.fc_reward(phi_a)
+        return {'r': reward}
+
+
 class CategoricalActorCriticNet(nn.Module, BaseNet):
     def __init__(self,
                  state_dim,
@@ -261,9 +287,9 @@ class TD3Net(nn.Module, BaseNet):
         return q_1, q_2
 
 
-class RewardPredictor(nn.Module, BaseNet):
+class RewardPredictorMSE(nn.Module, BaseNet):
     def __init__(self, num_inputs, action_dim, hidden_units):
-        super(RewardPredictor, self).__init__()
+        super(RewardPredictorMSE, self).__init__()
         self.to(Config.DEVICE)
         self.use_s_a = False
         self.use_s = False

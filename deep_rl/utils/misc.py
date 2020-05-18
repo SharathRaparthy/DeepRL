@@ -21,12 +21,12 @@ def run_steps(agent):
     while True:
         if config.save_interval and not agent.policy_step % config.save_interval:
             agent.save('data/%s-%s-%d' % (agent_name, config.tag, agent.total_steps))
-        if config.log_interval and not agent.policy_step % config.log_interval:
+        if config.log_interval and not agent.total_steps % config.log_interval:
             agent.logger.info('steps %d, %.2f steps/s' % (agent.total_steps, config.log_interval / (time.time() - t0)))
             t0 = time.time()
         if config.eval_interval and not agent.policy_step % config.eval_interval:
             agent.eval_episodes()
-        if config.max_steps and agent.policy_step >= config.max_steps:
+        if config.max_steps and agent.total_steps >= config.max_steps:
             agent.close()
             break
         if config.game_type == "aggressive_reward":

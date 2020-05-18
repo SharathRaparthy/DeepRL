@@ -369,13 +369,48 @@ def ppo_continuous(**kwargs):
     config.max_steps = 3e6
     config.target_kl = 0.01
     config.game_type = "aggressive_policy"
-    jobid = os.environ["SLURM_ARRAY_TASK_ID"]
-    # jobid = 1
+    # jobid = os.environ["SLURM_ARRAY_TASK_ID"]
+    jobid = 1
     improvement = [2, 3, 4, 5, 6]
     config.conservative_improvement_step = improvement[int(jobid) - 1]
     config.state_normalizer = MeanStdNormalizer()
     run_steps(PPOAgent(config))
 
+
+def implicit_ppo(**kwargs):
+    generate_tag(kwargs)
+    kwargs.setdefault('log_level', 0)
+    config = Config()
+    config.merge(kwargs)
+
+    config.task_fn = lambda: Task(config.game)
+    config.eval_env = config.task_fn()
+
+    config.network_fn = lambda: GaussianActorCriticNet(
+        config.state_dim, config.action_dim, actor_body=FCBody(config.state_dim, gate=torch.tanh),
+        critic_body=FCBody(config.state_dim, gate=torch.tanh))
+    config.actor_opt_fn = lambda params: torch.optim.Adam(params, 3e-4)
+    config.critic_opt_fn = lambda params: torch.optim.Adam(params, 1e-3)
+    config.reward_opt_fn = lambda  params: torch.optim.Adam(params, 1e-3)
+    config.reward_predictor = lambda: RewardPredictor(config.state_dim, config.action_dim, hidden_units=512)
+    config.discount = 0.99
+    config.use_gae = True
+    config.gae_tau = 0.95
+    config.gradient_clip = 0.5
+    config.rollout_length = 2048
+    config.optimization_epochs = 10
+    config.mini_batch_size = 64
+    config.ppo_ratio_clip = 0.2
+    config.log_interval = 2048
+    config.max_steps = 3e6
+    config.target_kl = 0.01
+    config.cg_steps = 10
+    # jobid = os.environ["SLURM_ARRAY_TASK_ID"]
+    jobid = 1
+    improvement = [2, 3, 4, 5, 6]
+    config.conservative_improvement_step = improvement[int(jobid) - 1]
+    config.state_normalizer = MeanStdNormalizer()
+    run_steps(ImplicitPPOAgent(config))
 
 # DDPG
 def ddpg_continuous(**kwargs):

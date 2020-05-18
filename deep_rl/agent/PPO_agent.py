@@ -10,12 +10,10 @@ from .BaseAgent import *
 import wandb
 
 # wandb.init(project="opt-cumulant-design")
-
 class PPOAgent(BaseAgent):
     def __init__(self, config):
         BaseAgent.__init__(self, config)
         self.config = config
-        self.logger = get_logger(tag=config.tag, log_level=config.log_level)
         self.task = config.task_fn()
         self.network = config.network_fn()
         self.rew_pred = config.reward_predictor()
@@ -27,7 +25,8 @@ class PPOAgent(BaseAgent):
         self.states = config.state_normalizer(self.states)
         self.rew_loss = nn.MSELoss()
         self.return_hat = 0
-        self.returns_all = deque(maxlen=3000)
+        self.returns_all = []
+        self.logger = get_logger(tag=config.tag, log_level=config.log_level)
         self.loss = []
         self.policy_step_count = 0
         self.policy_step = 0
@@ -36,12 +35,38 @@ class PPOAgent(BaseAgent):
     def step(self):
 
         config = self.config
-        self.policy_step_count += 1
+        storage = Storage(config.rollout_length)
         states = self.states
+        self.policy_step_count += 1
+        for _ in range(config.rollout_length):
+            prediction = self.network(states)
+
+            next_states, rewards, terminals, info = self.task.step(to_np(prediction['a']))
+            with torch.no_grad():
+                input_state = self.rew_pred.format_r_input(states, prediction['a'], next_states)
+                reward_hat = self.rew_pred(input_state)
+                self.return_hat += reward_hat.item()
+            self.record_online_return(info)
+            if terminals[0]:
+                # wandb.log({"Returns Hat": self.return_hat})
+                self.returns_all.append(self.return_hat)
+                self.logger.info('steps %d, episodic_return_test %f' % (self.total_steps, self.return_hat))
+                np.save('returns_hat_ppo_{}.npy'.format(os.environ["SLURM_ARRAY_TASK_ID"])
+                        , np.asarray(self.returns_all))
+                self.return_hat = 0
+
+            rewards = config.reward_normalizer(rewards)
+            reward_hat = config.reward_normalizer(reward_hat)
+            next_states = config.state_normalizer(next_states)
+            storage.add(prediction)
+            storage.add({'r': tensor(rewards).unsqueeze(-1),
+                         'r_hat': tensor(reward_hat).unsqueeze(-1),
+                         'm': tensor(1 - terminals).unsqueeze(-1),
+                         's': tensor(states)})
+            states = next_states
+            self.total_steps += config.num_workers
 
         self.states = states
-        storage = self.rollout(update_type='policy')
-
         prediction = self.network(states)
         storage.add(prediction)
         storage.placeholder()
@@ -94,8 +119,23 @@ class PPOAgent(BaseAgent):
 
     def reward_step(self):
         config = self.config
+        # Rolling out new trajectories for training reward function
+        storage = Storage(config.rollout_length)
+        states = self.task.reset()
         self.reward_step_count += 1
-        storage = self.rollout(update_type='reward')
+        self.rew_pred.train()
+        for _ in range(config.rollout_length):
+            with torch.no_grad():
+                prediction = self.network(states)
+            next_states, rewards, terminals, info = self.task.step(to_np(prediction['a']))
+            rewards = config.reward_normalizer(rewards)
+            next_states = config.state_normalizer(next_states)
+            storage.add(prediction)
+            storage.add({'r': tensor(rewards).unsqueeze(-1),
+                         's': tensor(states),
+                         'n_s': tensor(next_states),
+                         'a': tensor(prediction['a'])})
+            states = next_states
 
         storage.placeholder()
         states, rewards, next_states, actions = storage.cat(['s', 'r', 'n_s', 'a'])
@@ -114,56 +154,13 @@ class PPOAgent(BaseAgent):
                 sampled_r_hat = self.rew_pred(input_state)
                 reward_loss = self.rew_loss(sampled_r, sampled_r_hat)
                 self.loss.append(reward_loss)
+                # wandb.log({"Reward Loss": reward_loss})
                 self.rew_opt.zero_grad()
                 reward_loss.backward()
                 self.rew_opt.step()
-        np.save('{}_reward_loss.npy'.format(config.game_type), np.asarray(self.loss))
+        np.save('reward_loss.npy', np.asarray(self.loss))
 
-    def rollout(self, update_type):
-        config = self.config
-        states = self.states
-        storage = Storage(config.rollout_length)
-        for _ in range(config.rollout_length):
-            if update_type == 'policy':
-                prediction = self.network(states)
-                self.policy_step += config.num_workers
-            else:
-                with torch.no_grad():
-                    prediction = self.network(states)
-            next_states, rewards, terminals, info = self.task.step(to_np(prediction['a']))
 
-            if update_type == 'reward':
-                input_state = self.rew_pred.format_r_input(states, prediction['a'], next_states)
-                reward_hat = self.rew_pred(input_state)
-            else:
-                with torch.no_grad():
-                    input_state = self.rew_pred.format_r_input(states, prediction['a'], next_states)
-                    reward_hat = self.rew_pred(input_state)
-            self.return_hat += reward_hat.item()
-            # self.record_online_return(info)
-            if update_type == 'policy':
-                if terminals[0]:
-                    self.returns_all.append(self.return_hat)
-                    self.logger.info('steps %d, episodic_return_hat_train %s' % (self.policy_step, self.return_hat))
-                    np.save('{}_returns_hat_ppo_{}.npy'.format(config.game_type,
-                                                                         config.conservative_improvement_step,
-                                                                         config.conservative_improvement_step),
-                            np.asarray(self.returns_all))
-                    self.return_hat = 0
-
-            rewards = config.reward_normalizer(rewards)
-            reward_hat = config.reward_normalizer(reward_hat)
-            next_states = config.state_normalizer(next_states)
-            storage.add(prediction)
-            storage.add({'r': tensor(rewards).unsqueeze(-1),
-                         'r_hat': tensor(reward_hat).unsqueeze(-1),
-                         'm': tensor(1 - terminals).unsqueeze(-1),
-                         's': tensor(states),
-                         'n_s': tensor(next_states),
-                         'a': tensor(prediction['a'])})
-            states = next_states
-            self.total_steps += config.num_workers
-        return storage
 
 
 

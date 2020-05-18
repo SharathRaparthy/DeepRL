@@ -17,6 +17,29 @@ def select_device(gpu_id):
         Config.DEVICE = torch.device('cpu')
 
 
+def to_cuda(x):
+    try:
+        return x.cuda()
+    except:
+        return torch.from_numpy(x).float().cuda()
+
+
+def to_tensor(x):
+    if type(x) == np.ndarray:
+        return torch.from_numpy(x).float()
+    elif type(x) == torch.Tensor:
+        return x
+    else:
+        print("Type error. Input should be either numpy array or torch tensor")
+
+
+def to_device(x, GPU=False):
+    if GPU:
+        return to_cuda(x)
+    else:
+        return to_tensor(x)
+
+
 def tensor(x):
     if isinstance(x, torch.Tensor):
         return x
