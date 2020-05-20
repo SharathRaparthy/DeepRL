@@ -156,7 +156,6 @@ class GaussianActorCriticNet(nn.Module, BaseNet):
         self.fc_critic = layer_init(nn.Linear(critic_body.feature_dim, 1), 1e-3)
         self.std = nn.Parameter(torch.zeros(action_dim))
         self.phi_params = list(self.phi_body.parameters())
-
         self.actor_params = list(self.actor_body.parameters()) + list(self.fc_action.parameters()) + self.phi_params
         self.actor_params.append(self.std)
         self.critic_params = list(self.critic_body.parameters()) + list(self.fc_critic.parameters()) + self.phi_params
@@ -182,30 +181,36 @@ class GaussianActorCriticNet(nn.Module, BaseNet):
                 'v': v}
 
 
+
 class RewardPredictor(nn.Module, BaseNet):
     def __init__(self,
                  state_dim,
                  action_dim,
                  phi_body=None,
-                 reward_body=None): # No need of critic body
+                 reward_body=None):
         super(RewardPredictor, self).__init__()
         if phi_body is None: phi_body = DummyBody(state_dim)
-        if reward_body is None: actor_body = DummyBody(phi_body.feature_dim)
+        if reward_body is None: reward_body = DummyBody(phi_body.feature_dim)
         self.phi_body = phi_body
         self.reward_body = reward_body
         self.fc_reward = layer_init(nn.Linear(reward_body.feature_dim, action_dim), 1e-3)
-
+        self.std = nn.Parameter(torch.zeros(action_dim))
         self.phi_params = list(self.phi_body.parameters())
-
         self.reward_params = list(self.reward_body.parameters()) + list(self.fc_reward.parameters()) + self.phi_params
+        self.reward_params.append(self.std)
+
         self.to(Config.DEVICE)
 
-    def forward(self, obs, action=None):
+    def forward(self, obs):
         obs = tensor(obs)
         phi = self.phi_body(obs)
         phi_a = self.reward_body(phi)
-        reward = self.fc_reward(phi_a)
+        mean = torch.tanh(self.fc_reward(phi_a))
+        dist = torch.distributions.Normal(mean, F.softplus(self.std))
+        reward = dist.sample()
+
         return {'r': reward}
+
 
 
 class CategoricalActorCriticNet(nn.Module, BaseNet):

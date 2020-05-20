@@ -33,8 +33,8 @@ def to_tensor(x):
         print("Type error. Input should be either numpy array or torch tensor")
 
 
-def to_device(x, GPU=False):
-    if GPU:
+def to_device(x, use_gpu=False):
+    if use_gpu:
         return to_cuda(x)
     else:
         return to_tensor(x)

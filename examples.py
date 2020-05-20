@@ -8,6 +8,9 @@ from deep_rl import *
 import os
 
 # DQN
+from deep_rl.agent.ImplicitPPO_Agent import ImplicitPPOAgent
+
+
 def dqn_feature(**kwargs):
     generate_tag(kwargs)
     kwargs.setdefault('log_level', 0)
@@ -392,7 +395,8 @@ def implicit_ppo(**kwargs):
     config.actor_opt_fn = lambda params: torch.optim.Adam(params, 3e-4)
     config.critic_opt_fn = lambda params: torch.optim.Adam(params, 1e-3)
     config.reward_opt_fn = lambda  params: torch.optim.Adam(params, 1e-3)
-    config.reward_predictor = lambda: RewardPredictor(config.state_dim, config.action_dim, hidden_units=512)
+    config.reward_predictor = lambda: RewardPredictor(config.state_dim, config.action_dim,
+                                                      reward_body=FCBody(config.state_dim, gate=torch.tanh))
     config.discount = 0.99
     config.use_gae = True
     config.gae_tau = 0.95
@@ -405,6 +409,9 @@ def implicit_ppo(**kwargs):
     config.max_steps = 3e6
     config.target_kl = 0.01
     config.cg_steps = 10
+    config.use_true_rewards = False
+    config.use_both_rewards = True
+    config.use_gpu = False
     # jobid = os.environ["SLURM_ARRAY_TASK_ID"]
     jobid = 1
     improvement = [2, 3, 4, 5, 6]
@@ -495,7 +502,8 @@ if __name__ == '__main__':
     game = 'HalfCheetah-v2'
     # game = 'Hopper-v2'
     # a2c_continuous(game=game)
-    ppo_continuous(game=game)
+    # ppo_continuous(game=game)
+    implicit_ppo(game=game)
     # ddpg_continuous(game=game)
     # td3_continuous(game=game)
 
