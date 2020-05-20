@@ -411,12 +411,12 @@ def implicit_ppo(**kwargs):
     config.eval_interval = 5 * config.rollout_length
     config.cg_steps = 10
     config.use_true_rewards = False
-    config.use_both_rewards = True
+    config.use_both_rewards = False
     config.use_gpu = False
-    # jobid = os.environ["SLURM_ARRAY_TASK_ID"]
-    jobid = 1
-    improvement = [2, 3, 4, 5, 6]
-    config.conservative_improvement_step = improvement[int(jobid) - 1]
+    jobid = os.environ["SLURM_ARRAY_TASK_ID"]
+    # jobid = 1
+    # improvement = [2, 3, 4, 5, 6]
+    # config.conservative_improvement_step = improvement[int(jobid) - 1]
     config.state_normalizer = MeanStdNormalizer()
     run_steps(ImplicitPPOAgent(config))
 
@@ -487,7 +487,7 @@ if __name__ == '__main__':
     mkdir('log')
     mkdir('tf_log')
     set_one_thread()
-    random_seed()
+    random_seed(int(os.environ['SLURM_ARRAY_TASK_ID']))
     select_device(-1)
 
     # select_device(0)

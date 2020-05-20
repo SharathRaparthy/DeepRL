@@ -58,7 +58,7 @@ def to_np(t):
 
 def random_seed(seed=None):
     np.random.seed(seed)
-    torch.manual_seed(np.random.randint(int(1e6)))
+    torch.manual_seed(seed)
 
 
 def set_one_thread():

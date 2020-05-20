@@ -11,7 +11,6 @@ import torch.multiprocessing as mp
 from collections import deque
 from skimage.io import imsave
 
-
 class BaseAgent:
     def __init__(self, config):
         self.config = config
@@ -57,6 +56,7 @@ class BaseAgent:
             self.total_steps, np.mean(episodic_returns), np.std(episodic_returns) / np.sqrt(len(episodic_returns))
         ))
         self.logger.add_scalar('episodic_return_test', np.mean(episodic_returns), self.total_steps)
+        np.save('implicit_eval_pred_rewards_{}.npy'.format(os.environ['SLURM_ARRAY_TASK_ID']), np.mean(episodic_returns))
         return {
             'episodic_return_test': np.mean(episodic_returns),
         }

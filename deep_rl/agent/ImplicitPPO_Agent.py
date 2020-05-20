@@ -102,8 +102,7 @@ class ImplicitPPOAgent(BaseAgent):
                                                                                states, actions,
                                                                                log_probs_old,
                                                                                returns,
-                                                                               advantages,
-                                                                               config)
+                                                                               advantages)
                 approx_kl = (sampled_log_probs_old - prediction['log_pi_a']).mean()
                 if approx_kl <= 1.5 * config.target_kl:
                     self.actor_opt.zero_grad()
@@ -114,15 +113,8 @@ class ImplicitPPOAgent(BaseAgent):
                 value_loss.backward()
                 self.critic_opt.step()
         last_batch_indices = batch_indices
-        policy_loss, _, _ = self.get_loss(last_batch_indices,
-                                          states, actions,
-                                          log_probs_old,
-                                          returns,
-                                          advantages,
-                                          config)
-        policy_grad = torch.autograd.grad(policy_loss, self.network.actor_params, create_graph=True)
-        self.inner_params = self.network.actor_params
-        matrix_evaluator = self.matrix_evaluator(policy_grad, lam=1.0) # fixed lambda for now.
+
+        matrix_evaluator = self.matrix_evaluator(storage, last_batch_indices, lam=1.0) # fixed lambda for now.
 
         return policy_loss, matrix_evaluator
 
@@ -184,8 +176,7 @@ class ImplicitPPOAgent(BaseAgent):
                                                                                states, actions,
                                                                                log_probs_old,
                                                                                returns,
-                                                                               advantages,
-                                                                               config)
+                                                                               advantages)
 
                 approx_kl = (sampled_log_probs_old - prediction['log_pi_a']).mean()
                 if approx_kl <= 1.5 * config.target_kl:
@@ -201,8 +192,7 @@ class ImplicitPPOAgent(BaseAgent):
                                           states, actions,
                                           log_probs_old,
                                           returns,
-                                          advantages,
-                                          config)
+                                          advantages)
         return valid_policy_loss
 
     def implicit_step(self):
@@ -210,23 +200,35 @@ class ImplicitPPOAgent(BaseAgent):
         outer_loss = self.outer_step()
         outer_grad = torch.autograd.grad(outer_loss, self.network.actor_params)
         flat_grad = torch.cat([g.contiguous().view(-1) for g in outer_grad])
-
-        implicit_grad = cg_solve(matrix_evaluator, flat_grad, self.config.cg_steps, x_init=None)
+        with torch.autograd.set_detect_anomaly(True):
+            implicit_grad = cg_solve(matrix_evaluator, flat_grad, self.config.cg_steps, x_init=None)
         self.implicit_reward_update(implicit_grad)
 
-    def hessian_vector_product(self, inner_grad, vector):
+    def hessian_vector_product(self, storage, last_batch_indices, vector):
         """
         Performs hessian vector product on the train set in task with the provided vector
         """
-        flat_grad = torch.cat([g.contiguous().view(-1) for g in inner_grad])
+        states, actions, log_probs_old, returns, advantages = storage.cat(['s', 'a', 'log_pi_a', 'ret', 'adv'])
+        actions = actions.detach()
+        log_probs_old = log_probs_old.detach()
+        advantages = (advantages - advantages.mean()) / advantages.std()
+
+        policy_loss, _, _ = self.get_loss(last_batch_indices,
+                                          states, actions,
+                                          log_probs_old,
+                                          returns,
+                                          advantages)
+        policy_grad = torch.autograd.grad(policy_loss, self.network.actor_params, create_graph=True)
+        flat_grad = torch.cat([g.contiguous().view(-1) for g in policy_grad])
         vec = to_device(vector, self.config.use_gpu)
         h = torch.sum(flat_grad * vec)
 
-        hvp = torch.autograd.grad(h, self.inner_params, retain_graph=True)
+        hvp = torch.autograd.grad(h, self.network.actor_params, retain_graph=True)
+
         hvp_flat = torch.cat([g.contiguous().view(-1) for g in hvp])
         return hvp_flat
 
-    def matrix_evaluator(self, inner_grad, lam, regu_coef=1.0, lam_damping=10.0):
+    def matrix_evaluator(self, storage, last_batch_indices, lam, regu_coef=1.0, lam_damping=10.0):
         """
         Constructor function that can be given to CG optimizer
         Works for both type(lam) == float and type(lam) == np.ndarray
@@ -234,7 +236,7 @@ class ImplicitPPOAgent(BaseAgent):
         if type(lam) == np.ndarray:
             lam = to_device(lam, self.config.use_gpu)
         def evaluator(v):
-            hvp = self.hessian_vector_product(inner_grad, v)
+            hvp = self.hessian_vector_product(storage, last_batch_indices, v)
             Av = (1.0 + regu_coef) * v + hvp / (lam + lam_damping)
             return Av
         return evaluator
@@ -245,7 +247,6 @@ class ImplicitPPOAgent(BaseAgent):
         Assumed that the gradient is a tuple/list of size compatible with model.parameters()
         If flat_grad, then the gradient is a flattened vector
         """
-        params = parameters_to_vector(self.rew_pred.reward_params)
         if flat_grad:
             offset = 0
             grad = to_device(grad, self.config.use_gpu)
@@ -255,7 +256,7 @@ class ImplicitPPOAgent(BaseAgent):
                 offset += p.nelement()
             self.rew_opt.step()
 
-    def get_loss(self, indices, states, actions, log_probs_old, returns, advantages, config):
+    def get_loss(self, indices, states, actions, log_probs_old, returns, advantages):
         batch_indices = indices
         batch_indices = tensor(batch_indices).long()
         sampled_states = states[batch_indices]
@@ -269,7 +270,7 @@ class ImplicitPPOAgent(BaseAgent):
         obj = ratio * sampled_advantages
         obj_clipped = ratio.clamp(1.0 - self.config.ppo_ratio_clip,
                                   1.0 + self.config.ppo_ratio_clip) * sampled_advantages
-        policy_loss = -torch.min(obj, obj_clipped).mean() - config.entropy_weight * prediction['ent'].mean()
+        policy_loss = -torch.min(obj, obj_clipped).mean() - self.config.entropy_weight * prediction['ent'].mean()
 
         value_loss = 0.5 * (sampled_returns - prediction['v']).pow(2).mean()
 
@@ -288,6 +289,7 @@ class ImplicitPPOAgent(BaseAgent):
                              .view_as(param).data)
 
             pointer += num_param
+        return parameters
 
     def eval_step(self, state):
         self.config.state_normalizer.set_read_only()
@@ -295,3 +297,6 @@ class ImplicitPPOAgent(BaseAgent):
         action = self.network(state)
         self.config.state_normalizer.unset_read_only()
         return to_np(action['a'])
+
+    def get_current_params(self):
+        return self.rew_pred.reward_params
