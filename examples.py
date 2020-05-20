@@ -408,6 +408,7 @@ def implicit_ppo(**kwargs):
     config.log_interval = 2048
     config.max_steps = 3e6
     config.target_kl = 0.01
+    config.eval_interval = 5 * config.rollout_length
     config.cg_steps = 10
     config.use_true_rewards = False
     config.use_both_rewards = True

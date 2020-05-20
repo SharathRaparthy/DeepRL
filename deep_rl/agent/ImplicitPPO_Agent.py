@@ -40,7 +40,6 @@ class ImplicitPPOAgent(BaseAgent):
         config = self.config
         storage = Storage(config.rollout_length)
         states = self.states
-        self.policy_step_count += 1
         for _ in range(config.rollout_length):
             prediction = self.network(states)
 
@@ -58,12 +57,12 @@ class ImplicitPPOAgent(BaseAgent):
             self.return_hat += rewards
             # self.record_online_return(info)
 
-            if terminals[0]:
-                self.returns_all.append(self.return_hat)
-                self.logger.info('steps %d, episodic_return_test %f' % (self.total_steps, self.return_hat))
-                np.save('returns_hat_ppo_{}.npy'.format(1)
-                        , np.asarray(self.returns_all))
-                self.return_hat = 0
+            # if terminals[0]:
+            #     self.returns_all.append(self.return_hat)
+            #     self.logger.info('steps %d, episodic_return_test %f' % (self.total_steps, self.return_hat))
+            #     np.save('returns_hat_ppo_{}.npy'.format(1)
+            #             , np.asarray(self.returns_all))
+            #     self.return_hat = 0
 
             rewards = config.reward_normalizer(rewards)
             next_states = config.state_normalizer(next_states)
@@ -128,6 +127,7 @@ class ImplicitPPOAgent(BaseAgent):
         return policy_loss, matrix_evaluator
 
     def outer_step(self):
+        # This can be turned into a function
         config = self.config
         storage = Storage(config.rollout_length)
         states = self.states
@@ -141,11 +141,11 @@ class ImplicitPPOAgent(BaseAgent):
             rewards = reward_hat['r'].mean().item()
             self.return_hat += rewards
 
-            if terminals[0]:
-                self.returns_all.append(self.return_hat)
-                self.logger.info('steps %d, episodic_return_test %f' % (self.total_steps, self.return_hat))
-
-                self.return_hat = 0
+            # if terminals[0]:
+            #     self.returns_all.append(self.return_hat)
+            #     self.logger.info('steps %d, episodic_return_test %f' % (self.total_steps, self.return_hat))
+            #
+            #     self.return_hat = 0
 
             rewards = config.reward_normalizer(rewards)
             next_states = config.state_normalizer(next_states)
@@ -154,7 +154,6 @@ class ImplicitPPOAgent(BaseAgent):
                          'm': tensor(1 - terminals).unsqueeze(-1),
                          's': tensor(states)})
             states = next_states
-            self.total_steps += config.num_workers
 
         self.states = states
         prediction = self.network(states)
@@ -207,15 +206,12 @@ class ImplicitPPOAgent(BaseAgent):
         return valid_policy_loss
 
     def implicit_step(self):
-        print([actor_param.shape for actor_param in self.network.actor_params])
-        print([rew_param.shape for rew_param in self.rew_pred.reward_params])
         _, matrix_evaluator = self.inner_step()
         outer_loss = self.outer_step()
         outer_grad = torch.autograd.grad(outer_loss, self.network.actor_params)
         flat_grad = torch.cat([g.contiguous().view(-1) for g in outer_grad])
 
         implicit_grad = cg_solve(matrix_evaluator, flat_grad, self.config.cg_steps, x_init=None)
-        print(len(implicit_grad))
         self.implicit_reward_update(implicit_grad)
 
     def hessian_vector_product(self, inner_grad, vector):
@@ -292,3 +288,10 @@ class ImplicitPPOAgent(BaseAgent):
                              .view_as(param).data)
 
             pointer += num_param
+
+    def eval_step(self, state):
+        self.config.state_normalizer.set_read_only()
+        state = self.config.state_normalizer(state)
+        action = self.network(state)
+        self.config.state_normalizer.unset_read_only()
+        return to_np(action['a'])
