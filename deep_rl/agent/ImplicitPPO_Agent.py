@@ -17,10 +17,14 @@ class ImplicitPPOAgent(BaseAgent):
         BaseAgent.__init__(self, config)
         self.config = config
         self.task = config.task_fn()
-        self.network = config.network_fn()
+        self.inner_network = config.network_fn()
+        self.outer_network = config.network_fn()
+        self.outer_network.load_state_dict(self.inner_network.state_dict())
         self.rew_pred = config.reward_predictor()
-        self.actor_opt = config.actor_opt_fn(self.network.actor_params)
-        self.critic_opt = config.critic_opt_fn(self.network.critic_params)
+        self.actor_opt_inner = config.actor_opt_fn(self.inner_network.actor_params)
+        self.critic_opt_inner = config.critic_opt_fn(self.inner_network.critic_params)
+        self.actor_opt_outer = config.actor_opt_fn(self.outer_network.actor_params)
+        self.critic_opt_outer = config.critic_opt_fn(self.outer_network.critic_params)
         self.rew_opt = config.reward_opt_fn(self.rew_pred.reward_params)
         self.total_steps = 0
         self.states = self.task.reset()
@@ -41,13 +45,13 @@ class ImplicitPPOAgent(BaseAgent):
         storage = Storage(config.rollout_length)
         states = self.states
         for _ in range(config.rollout_length):
-            prediction = self.network(states)
+            prediction = self.inner_network(states)
 
             next_states, true_rewards, terminals, info = self.task.step(to_np(prediction['a']))
 
             # input_state = self.rew_pred.format_r_input(states, prediction['a'], next_states)
+            # Do we need to take the mean? And should we do .item() ?
             reward_hat = self.rew_pred(states)
-            # TODO: Check for type.
             if config.use_true_rewards:
                 rewards = true_rewards
             elif config.use_both_rewards:
@@ -55,14 +59,6 @@ class ImplicitPPOAgent(BaseAgent):
             else:
                 rewards = reward_hat['r'].mean().item()
             self.return_hat += rewards
-            # self.record_online_return(info)
-
-            # if terminals[0]:
-            #     self.returns_all.append(self.return_hat)
-            #     self.logger.info('steps %d, episodic_return_test %f' % (self.total_steps, self.return_hat))
-            #     np.save('returns_hat_ppo_{}.npy'.format(1)
-            #             , np.asarray(self.returns_all))
-            #     self.return_hat = 0
 
             rewards = config.reward_normalizer(rewards)
             next_states = config.state_normalizer(next_states)
@@ -74,7 +70,7 @@ class ImplicitPPOAgent(BaseAgent):
             self.total_steps += config.num_workers
 
         self.states = states
-        prediction = self.network(states)
+        prediction = self.inner_network(states)
         storage.add(prediction)
         storage.placeholder()
 
@@ -98,22 +94,22 @@ class ImplicitPPOAgent(BaseAgent):
         for _ in range(config.optimization_epochs):
             sampler = random_sample(np.arange(states.size(0)), config.mini_batch_size)
             for batch_indices in sampler:
-                policy_loss, value_loss, sampled_log_probs_old = self.get_loss(batch_indices,
+                policy_loss, value_loss, sampled_log_probs_old = self.get_loss(self.inner_network,
+                                                                               batch_indices,
                                                                                states, actions,
                                                                                log_probs_old,
                                                                                returns,
                                                                                advantages)
                 approx_kl = (sampled_log_probs_old - prediction['log_pi_a']).mean()
                 if approx_kl <= 1.5 * config.target_kl:
-                    self.actor_opt.zero_grad()
+                    self.actor_opt_inner.zero_grad()
                     policy_loss.backward()
-                    self.actor_opt.step()
+                    self.actor_opt_inner.step()
 
-                self.critic_opt.zero_grad()
+                self.critic_opt_inner.zero_grad()
                 value_loss.backward()
-                self.critic_opt.step()
+                self.critic_opt_inner.step()
         last_batch_indices = batch_indices
-
         matrix_evaluator = self.matrix_evaluator(storage, last_batch_indices, lam=1.0) # fixed lambda for now.
 
         return policy_loss, matrix_evaluator
@@ -123,9 +119,9 @@ class ImplicitPPOAgent(BaseAgent):
         config = self.config
         storage = Storage(config.rollout_length)
         states = self.states
-
+        self.outer_network.load_state_dict(self.inner_network.state_dict())
         for _ in range(config.rollout_length):
-            prediction = self.network(states)
+            prediction = self.outer_network(states)
 
             next_states, true_rewards, terminals, info = self.task.step(to_np(prediction['a']))
 
@@ -148,7 +144,7 @@ class ImplicitPPOAgent(BaseAgent):
             states = next_states
 
         self.states = states
-        prediction = self.network(states)
+        prediction = self.outer_network(states)
         storage.add(prediction)
         storage.placeholder()
 
@@ -172,33 +168,35 @@ class ImplicitPPOAgent(BaseAgent):
         for _ in range(config.optimization_epochs):
             sampler = random_sample(np.arange(states.size(0)), config.mini_batch_size)
             for batch_indices in sampler:
-                valid_policy_loss, valid_value_loss, sampled_log_probs_old = self.get_loss(batch_indices,
-                                                                               states, actions,
-                                                                               log_probs_old,
-                                                                               returns,
-                                                                               advantages)
+                valid_policy_loss, valid_value_loss, sampled_log_probs_old = self.get_loss(self.outer_network,
+                                                                                           batch_indices,
+                                                                                           states, actions,
+                                                                                           log_probs_old,
+                                                                                           returns,
+                                                                                           advantages)
 
                 approx_kl = (sampled_log_probs_old - prediction['log_pi_a']).mean()
                 if approx_kl <= 1.5 * config.target_kl:
-                    self.actor_opt.zero_grad()
+                    self.actor_opt_outer.zero_grad()
                     valid_policy_loss.backward()
-                    self.actor_opt.step()
+                    self.actor_opt_outer.step()
 
-                self.critic_opt.zero_grad()
+                self.critic_opt_outer.zero_grad()
                 valid_value_loss.backward()
-                self.critic_opt.step()
+                self.critic_opt_outer.step()
         last_batch_indices = batch_indices
-        valid_policy_loss, _, _ = self.get_loss(last_batch_indices,
-                                          states, actions,
-                                          log_probs_old,
-                                          returns,
-                                          advantages)
+        valid_policy_loss, _, _ = self.get_loss(self.outer_network,
+                                                last_batch_indices,
+                                                states, actions,
+                                                log_probs_old,
+                                                returns,
+                                                advantages)
         return valid_policy_loss
 
     def implicit_step(self):
         _, matrix_evaluator = self.inner_step()
         outer_loss = self.outer_step()
-        outer_grad = torch.autograd.grad(outer_loss, self.network.actor_params)
+        outer_grad = torch.autograd.grad(outer_loss, self.outer_network.actor_params)
         flat_grad = torch.cat([g.contiguous().view(-1) for g in outer_grad])
         with torch.autograd.set_detect_anomaly(True):
             implicit_grad = cg_solve(matrix_evaluator, flat_grad, self.config.cg_steps, x_init=None)
@@ -213,17 +211,18 @@ class ImplicitPPOAgent(BaseAgent):
         log_probs_old = log_probs_old.detach()
         advantages = (advantages - advantages.mean()) / advantages.std()
 
-        policy_loss, _, _ = self.get_loss(last_batch_indices,
+        policy_loss, _, _ = self.get_loss(self.inner_network,
+                                          last_batch_indices,
                                           states, actions,
                                           log_probs_old,
                                           returns,
                                           advantages)
-        policy_grad = torch.autograd.grad(policy_loss, self.network.actor_params, create_graph=True)
+        policy_grad = torch.autograd.grad(policy_loss, self.inner_network.actor_params, create_graph=True)
         flat_grad = torch.cat([g.contiguous().view(-1) for g in policy_grad])
         vec = to_device(vector, self.config.use_gpu)
         h = torch.sum(flat_grad * vec)
 
-        hvp = torch.autograd.grad(h, self.network.actor_params, retain_graph=True)
+        hvp = torch.autograd.grad(h, self.inner_network.actor_params, retain_graph=True)
 
         hvp_flat = torch.cat([g.contiguous().view(-1) for g in hvp])
         return hvp_flat
@@ -256,7 +255,7 @@ class ImplicitPPOAgent(BaseAgent):
                 offset += p.nelement()
             self.rew_opt.step()
 
-    def get_loss(self, indices, states, actions, log_probs_old, returns, advantages):
+    def get_loss(self, network,  indices, states, actions, log_probs_old, returns, advantages):
         batch_indices = indices
         batch_indices = tensor(batch_indices).long()
         sampled_states = states[batch_indices]
@@ -265,7 +264,7 @@ class ImplicitPPOAgent(BaseAgent):
         sampled_returns = returns[batch_indices]
         sampled_advantages = advantages[batch_indices]
 
-        prediction = self.network(sampled_states, sampled_actions)
+        prediction = network(sampled_states, sampled_actions)
         ratio = (prediction['log_pi_a'] - sampled_log_probs_old).exp()
         obj = ratio * sampled_advantages
         obj_clipped = ratio.clamp(1.0 - self.config.ppo_ratio_clip,
@@ -294,7 +293,7 @@ class ImplicitPPOAgent(BaseAgent):
     def eval_step(self, state):
         self.config.state_normalizer.set_read_only()
         state = self.config.state_normalizer(state)
-        action = self.network(state)
+        action = self.inner_network(state)
         self.config.state_normalizer.unset_read_only()
         return to_np(action['a'])
 

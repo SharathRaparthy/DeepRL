@@ -16,7 +16,7 @@ class BaseAgent:
         self.config = config
         self.logger = get_logger(tag=config.tag, log_level=config.log_level)
         self.task_ind = 0
-        self.returns_all = deque(maxlen=3000)
+        self.returns_all = []
 
     def close(self):
         np.save('ppo_learned_rewards.npy', np.asarray(self.returns_all))
@@ -56,7 +56,8 @@ class BaseAgent:
             self.total_steps, np.mean(episodic_returns), np.std(episodic_returns) / np.sqrt(len(episodic_returns))
         ))
         self.logger.add_scalar('episodic_return_test', np.mean(episodic_returns), self.total_steps)
-        np.save('implicit_eval_pred_rewards_{}.npy'.format(os.environ['SLURM_ARRAY_TASK_ID']), np.mean(episodic_returns))
+        np.save('implicit_eval_pred_rewards_{}.npy'.format(os.environ['SLURM_ARRAY_TASK_ID']),
+                np.asarray(self.returns_all.append(np.mean(episodic_returns))))
         return {
             'episodic_return_test': np.mean(episodic_returns),
         }
